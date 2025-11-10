@@ -511,6 +511,8 @@ async def message_bot(channel, refresh_interval=300):
         view.add_item(button_premium)
         view.add_item(button_manage)
         view.add_item(button_reset_key)
+        
+        return view
 
     embed_main = make_embed(
         "SansMoba Premium",
