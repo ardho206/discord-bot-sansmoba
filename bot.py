@@ -10,7 +10,7 @@ import time
 import sqlite3
 from urllib.parse import quote
 import discord
-from discord.ui import Button, View, Modal, TextInput
+from discord.ui import Button, View, Modal, TextInput, Select
 from discord import app_commands
 import aiohttp
 from dotenv import load_dotenv
@@ -19,11 +19,11 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-REPO = os.getenv("GITHUB_REPO")
 REPO_2 = os.getenv("GITHUB_REPO_2")
+REPO_3 = os.getenv("GITHUB_REPO_3")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-FILE_PATH = os.getenv("FILE_PATH")
 FILE_PATH_2 = os.getenv("FILE_PATH_2")
+FILE_PATH_3 = os.getenv("FILE_PATH_3")
 BRANCH = os.getenv("BRANCH", "main")
 GUILD_ID = 1360567703709941782
 ALLOWED_USERS = [1154602289097617450, 938692894410297414]
@@ -50,9 +50,20 @@ CREATE TABLE IF NOT EXISTS users (
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS system_state (
+    id INTEGER PRIMARY KEY,
+    last_repo INTEGER
+)
+""")
+
+# kalo belum ada row isi 0 (repo2)
+cursor.execute("INSERT OR IGNORE INTO system_state (id, last_repo) VALUES (1, 0)")
+
 conn.commit()
 
 db_lock = asyncio.Lock()
+github_lock = asyncio.Lock()
 
 # ---------- Embed builder ----------
 API_BASE = "https://api.github.com"
@@ -69,16 +80,18 @@ def success_embed(msg):
 async def fetch_file(session, repo, path, branch):
     path_enc = quote(path)
     url = f"{API_BASE}/repos/{repo}/contents/{path_enc}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
     params = {"ref": branch}
     async with session.get(url, headers=headers, params=params) as r:
+        text = await r.text()
         if r.status != 200:
-            return None, r.status, await r.text()
+            return None, r.status, text
         return await r.json(), r.status, None
+
 async def update_file(session, repo, path, branch, new_content, sha, message):
     path_enc = quote(path)
     url = f"{API_BASE}/repos/{repo}/contents/{path_enc}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
     payload = {
         "message": message,
         "content": base64.b64encode(new_content.encode()).decode(),
@@ -100,7 +113,8 @@ class UsernameModal(Modal):
             self.add_item(self.key_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)  # <--- ini bikin interaction hidup
+        # defer karena ada operasi network (github + db)
+        await interaction.response.defer(ephemeral=True)
         username = self.username_input.value.strip()
         key = self.key_input.value.strip() if self.key_input else self.key_slot
         uid = str(interaction.user.id)
@@ -109,66 +123,116 @@ class UsernameModal(Modal):
             await interaction.followup.send(embed=error_embed("Username atau Key kosong!"), ephemeral=True)
             return
 
-        # ambil data key dari DB
+        # ambil data key dari DB (safely)
         async with db_lock:
             cursor.execute("SELECT slots, used FROM keys WHERE key = ?", (key,))
             key_data = cursor.fetchone()
+
         if not key_data:
             await interaction.followup.send(embed=error_embed("Key tidak valid!"), ephemeral=True)
-            return
+            return 
 
-        total_slots, used_json = key_data
-        used_list = json.loads(used_json) if key_data[1] else []
+        total_slots = key_data[0]
+        used_json = key_data[1] or "[]"
+        try:
+            used_list = json.loads(used_json)
+        except Exception:
+            used_list = []
 
         if len(used_list) >= total_slots:
             await interaction.followup.send(embed=error_embed("Slot key habis!"), ephemeral=True)
             return
 
-        # lock github biar ga bentrok
-        async with asyncio.Lock():
-            async with aiohttp.ClientSession() as session:
-                # repo 1: hapus klo ada
-                file_data1, status1, err1 = await fetch_file(session, REPO, FILE_PATH, BRANCH)
-                if file_data1 is None:
-                    await interaction.followup.send(embed=error_embed("Jika anda melihat pesan ini, hubungi admin!"), ephemeral=True)
-                    return
-                sha1 = file_data1.get("sha")
-                old_content1 = base64.b64decode(file_data1.get("content", "").encode()).decode() if file_data1.get("content") else ""
-                lines1 = [l.strip() for l in old_content1.splitlines() if l.strip()]
-                if username in lines1:
-                    lines1.remove(username)
-                    new_content1 = "\n".join(lines1)
-                    await update_file(session, REPO, FILE_PATH, BRANCH, new_content1, sha1, f"remove {username}")
+        # --- ambil repo terakhir ---
+        async with db_lock:
+            cursor.execute("SELECT last_repo FROM system_state WHERE id = 1")
+            row = cursor.fetchone()
+            last_repo = row[0] if row else 0
 
-                # repo 2: tambah klo belum ada
-                file_data2, status2, err2 = await fetch_file(session, REPO_2, FILE_PATH_2, BRANCH)
-                if file_data2 is None:
-                    await interaction.followup.send(embed=error_embed("Jika anda melihat pesan ini, hubungi admin!"), ephemeral=True)
-                    return
-                sha2 = file_data2.get("sha")
-                old_content2 = base64.b64decode(file_data2.get("content", "").encode()).decode() if file_data2.get("content") else ""
-                lines2 = [l.strip() for l in old_content2.splitlines() if l.strip()]
-                if username not in lines2:
-                    new_content2 = old_content2 + ("\n" if old_content2 and not old_content2.endswith("\n") else "") + username
-                    status_update, resp_text = await update_file(session, REPO_2, FILE_PATH_2, BRANCH, new_content2, sha2, f"add {username}")
-                    if status_update not in (200, 201):
-                        await interaction.followup.send(embed=error_embed("Jika anda melihat pesan ini, hubungi admin!"), ephemeral=True)
+        # tentukan repo tujuan sekarang
+        if last_repo == 0:
+            target_repo = 2
+        else:
+            target_repo = 3
+
+        # toggle repo buat next submit
+        new_last_repo = 1 if last_repo == 0 else 0
+
+        async with db_lock:
+            cursor.execute("UPDATE system_state SET last_repo = ? WHERE id = 1", (new_last_repo,))
+            conn.commit()
+
+
+        # lock github biar ga bentrok (pakai github_lock)
+        async with github_lock:
+            async with aiohttp.ClientSession() as session:
+
+                if target_repo == 2:
+                    # pake repo 2
+                    file_data, status, err = await fetch_file(session, REPO_2, FILE_PATH_2, BRANCH)
+                    if file_data is None:
+                        await interaction.followup.send(embed=error_embed("Jika kamu melihat pesan ini, hubungi admin!"), ephemeral=True)
                         return
 
-        # update DB
+                    sha = file_data.get("sha")
+                    content = ""
+                    if file_data.get("content"):
+                        try:
+                            content = base64.b64decode(file_data["content"].encode()).decode()
+                        except:
+                            content = ""
+
+                    new_content = content + ("\n" if content and not content.endswith("\n") else "") + username
+
+                    status_update, _ = await update_file(
+                        session, REPO_2, FILE_PATH_2, BRANCH,
+                        new_content, sha, f"add {username}"
+                    )
+                    if status_update not in (200, 201):
+                        await interaction.followup.send(embed=error_embed("Jika kamu melihat pesan ini, hubungi admin!"), ephemeral=True)
+                        return
+
+                else:
+                    # pake repo 3
+                    file_data, status, err = await fetch_file(session, REPO_3, FILE_PATH_3, BRANCH)
+                    if file_data is None:
+                        await interaction.followup.send(embed=error_embed("Jika kamu melihat pesan ini, hubungi admin!"), ephemeral=True)
+                        return
+
+                    sha = file_data.get("sha")
+                    content = ""
+                    if file_data.get("content"):
+                        try:
+                            content = base64.b64decode(file_data["content"].encode()).decode()
+                        except:
+                            content = ""
+
+                    new_content = content + ("\n" if content and not content.endswith("\n") else "") + username
+
+                    status_update, _ = await update_file(
+                        session, REPO_3, FILE_PATH_3, BRANCH,
+                        new_content, sha, f"add {username}"
+                    )
+                    if status_update not in (200, 201):
+                        await interaction.followup.send(embed=error_embed("Jika kamu melihat pesan ini, hubungi admin!"), ephemeral=True)
+                        return
+
+        # update DB (safely)
         used_list.append(username)
         async with db_lock:
             cursor.execute("UPDATE keys SET used = ? WHERE key = ?", (json.dumps(used_list), key))
             cursor.execute("SELECT usernames FROM users WHERE user_id = ?", (uid,))
             res = cursor.fetchone()
             if res:
-                usernames = json.loads(res[0])
+                try:
+                    usernames = json.loads(res[0]) if res[0] else []
+                except Exception:
+                    usernames = []
                 usernames.append(username)
                 cursor.execute("UPDATE users SET usernames = ? WHERE user_id = ?", (json.dumps(usernames), uid))
             else:
-                cursor.execute("INSERT INTO users (user_id,key,usernames) VALUES (?,?,?)", (uid,key,json.dumps([username])))
+                cursor.execute("INSERT INTO users (user_id,key,usernames) VALUES (?,?,?)", (uid, key, json.dumps([username])))
             conn.commit()
-
 
         await interaction.followup.send(embed=success_embed(f"Username `{username}` berhasil dipindahkan ke slot premium! Sisa slot: {total_slots-len(used_list)}"), ephemeral=True)
 
@@ -185,17 +249,25 @@ async def manage_callback(interaction: discord.Interaction):
         return
 
     key, usernames_json = user_row
-    usernames = json.loads(usernames_json) if usernames_json else []
+    try:
+        usernames = json.loads(usernames_json) if usernames_json else []
+    except Exception:
+        usernames = []
 
-    # ambil data key dari db
-    cursor.execute("SELECT slots, used FROM keys WHERE key = ?", (key,))
-    key_row = cursor.fetchone()
+    # ambil data key dari db (gunakan lock)
+    async with db_lock:
+        cursor.execute("SELECT slots, used FROM keys WHERE key = ?", (key,))
+        key_row = cursor.fetchone()
     if not key_row:
         await interaction.response.send_message(embed=error_embed("Key tidak ditemukan!"), ephemeral=True)
         return
 
-    total_slots, used_json = key_row
-    used_list = json.loads(used_json) if used_json else []
+    total_slots = key_row[0]
+    used_json = key_row[1] or "[]"
+    try:
+        used_list = json.loads(used_json)
+    except Exception:
+        used_list = []
     remaining_slots = total_slots - len(used_list)
 
     if not used_list:
@@ -212,7 +284,7 @@ async def manage_callback(interaction: discord.Interaction):
 
     view = View(timeout=None)
     options = [discord.SelectOption(label=u, description=f"Edit username {u}") for u in used_list]
-    select = discord.ui.Select(placeholder="Pilih username", options=options, min_values=1, max_values=1)
+    select = Select(placeholder="Pilih username", options=options, min_values=1, max_values=1)
 
     async def select_callback(inter: discord.Interaction):
         values = inter.data.get("values", [])
@@ -220,13 +292,13 @@ async def manage_callback(interaction: discord.Interaction):
             await inter.response.send_message(embed=error_embed("Tidak ada username yang dipilih!"), ephemeral=True)
             return
         selected = values[0]
+        # langsung tampilkan modal (ini cepat)
         await inter.response.send_modal(EditUsernameModal(key, selected))
 
     select.callback = select_callback
     view.add_item(select)
 
     await interaction.response.send_message(embed=make_manage_embed(), ephemeral=True, view=view)
-
 
 # ---------------- Edit Username Modal (dengan auto-refresh) ----------------
 class EditUsernameModal(Modal):
@@ -238,64 +310,128 @@ class EditUsernameModal(Modal):
         self.add_item(self.new_username)
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
         new_username = self.new_username.value.strip()
         if not new_username:
-            await interaction.response.send_message(embed=error_embed("Username tidak boleh kosong!"), ephemeral=True)
+            await interaction.followup.send(embed=error_embed("Username tidak boleh kosong!"), ephemeral=True)
             return
 
         # ambil data key
         async with db_lock:
             cursor.execute("SELECT used FROM keys WHERE key = ?", (self.key,))
             row = cursor.fetchone()
+
         if not row:
-            await interaction.response.send_message(embed=error_embed("Key tidak ditemukan!"), ephemeral=True)
+            await interaction.followup.send(embed=error_embed("Key tidak ditemukan!"), ephemeral=True)
             return
 
-        used_list = json.loads(row[0]) if row[0] else []
+        used_json = row[0] or "[]"
+        try:
+            used_list = json.loads(used_json)
+        except:
+            used_list = []
+
         if new_username in used_list:
-            await interaction.response.send_message(embed=error_embed("Username sudah digunakan!"), ephemeral=True)
+            await interaction.followup.send(embed=error_embed("Username sudah digunakan!"), ephemeral=True)
             return
         if self.old_username not in used_list:
-            await interaction.response.send_message(embed=error_embed("Username lama tidak ada di key!"), ephemeral=True)
+            await interaction.followup.send(embed=error_embed("Username lama tidak ada di key!"), ephemeral=True)
             return
 
-        # update github di luar lock
-        async with aiohttp.ClientSession() as session:
-            file_data, status, err_text = await fetch_file(session, REPO_2, FILE_PATH_2, BRANCH)
-            if file_data is None:
-                await interaction.response.send_message(embed=error_embed("Jika anda melihat pesan ini, hubungi admin!"), ephemeral=True)
-                return
+        # cek repo2 dulu, kalo ga ada baru repo3
+        target_repo = None
+        target_path = None
+        target_sha = None
+        target_lines = None
 
-            sha = file_data["sha"]
-            old_content = base64.b64decode(file_data.get("content", "").encode()).decode() if file_data.get("content") else ""
-            lines = [line.strip() for line in old_content.splitlines() if line.strip()]
+        async with github_lock:
+            async with aiohttp.ClientSession() as session:
 
-            if self.old_username not in lines:
-                await interaction.response.send_message(embed=error_embed("Username lama tidak ditemukan di slot premium!"), ephemeral=True)
-                return
+                # ---------- CEK REPO 2 ----------
+                file2, _, _ = await fetch_file(session, REPO_2, FILE_PATH_2, BRANCH)
+                if file2:
+                    old2 = ""
+                    if file2.get("content"):
+                        try:
+                            old2 = base64.b64decode(file2["content"]).decode()
+                        except:
+                            old2 = ""
+                    lines2 = [l.strip() for l in old2.splitlines() if l.strip()]
 
-            lines[lines.index(self.old_username)] = new_username
-            new_content = "\n".join(lines)
-            await update_file(session, REPO_2, FILE_PATH_2, BRANCH, new_content, sha, f"edit {self.old_username} -> {new_username}")
+                    if self.old_username in lines2:
+                        target_repo = REPO_2
+                        target_path = FILE_PATH_2
+                        target_sha = file2.get("sha")
+                        target_lines = lines2
 
-        # update DB sekaligus
+                # ---------- KALO GA ADA, CEK REPO 3 ----------
+                if target_repo is None:
+                    file3, _, _ = await fetch_file(session, REPO_3, FILE_PATH_3, BRANCH)
+                    if file3:
+                        old3 = ""
+                        if file3.get("content"):
+                            try:
+                                old3 = base64.b64decode(file3["content"]).decode()
+                            except:
+                                old3 = ""
+                        lines3 = [l.strip() for l in old3.splitlines() if l.strip()]
+
+                        if self.old_username in lines3:
+                            target_repo = REPO_3
+                            target_path = FILE_PATH_3
+                            target_sha = file3.get("sha")
+                            target_lines = lines3
+
+                # kalo dua2nya ga ada
+                if target_repo is None:
+                    await interaction.followup.send(embed=error_embed("Username lama tidak ditemukan di list manapun!"), ephemeral=True)
+                    return
+
+                # update isi file
+                idx = target_lines.index(self.old_username)
+                target_lines[idx] = new_username
+                new_content = "\n".join(target_lines)
+
+                status, resp = await update_file(
+                    session,
+                    target_repo,
+                    target_path,
+                    BRANCH,
+                    new_content,
+                    target_sha,
+                    f"edit {self.old_username} -> {new_username}"
+                )
+
+                if status not in (200, 201):
+                    await interaction.followup.send(embed=error_embed("Gagal update github!"), ephemeral=True)
+                    return
+
+        # update DB lokal
         used_list[used_list.index(self.old_username)] = new_username
         uid = str(interaction.user.id)
+
         async with db_lock:
             cursor.execute("UPDATE keys SET used = ? WHERE key = ?", (json.dumps(used_list), self.key))
             cursor.execute("SELECT usernames FROM users WHERE user_id = ?", (uid,))
             res = cursor.fetchone()
+
             if res:
-                usernames = json.loads(res[0])
+                try:
+                    usernames = json.loads(res[0]) if res[0] else []
+                except:
+                    usernames = []
+
                 if self.old_username in usernames:
                     usernames[usernames.index(self.old_username)] = new_username
                     cursor.execute("UPDATE users SET usernames = ? WHERE user_id = ?", (json.dumps(usernames), uid))
+
             conn.commit()
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=make_embed(
                 "Edit Username Sukses",
-                f"✅ Username `{self.old_username}` diubah ke `{new_username}`!\n**Mohon menunggu beberapa menit setelah perubahan username!**",
+                f"username `{self.old_username}` diubah ke `{new_username}`!",
                 color=0x00FF00
             ),
             ephemeral=True
@@ -326,7 +462,10 @@ class ResetKeyModal(Modal):
                 return
 
             old_key, usernames_json = row
-            usernames = json.loads(usernames_json) if usernames_json else []
+            try:
+                usernames = json.loads(usernames_json) if usernames_json else []
+            except Exception:
+                usernames = []
 
             if not usernames:
                 await interaction.followup.send(embed=error_embed("Username lama tidak ditemukan!"), ephemeral=True)
@@ -339,8 +478,12 @@ class ResetKeyModal(Modal):
                 await interaction.followup.send(embed=error_embed("Key baru tidak ditemukan di database!"), ephemeral=True)
                 return
 
-            slots, used_json = key_row
-            used_list = json.loads(used_json) if used_json else []
+            slots = key_row[0]
+            used_json = key_row[1] or "[]"
+            try:
+                used_list = json.loads(used_json)
+            except Exception:
+                used_list = []
 
             if used_list:
                 await interaction.followup.send(embed=error_embed("Key baru sudah pernah digunakan!"), ephemeral=True)
@@ -405,7 +548,7 @@ async def generate_key(interaction: discord.Interaction, slots: int, keys: int =
         now = time.time()
         for _ in range(keys):
             new_key = f"SansPrem_{''.join(random.choices(string.ascii_letters + string.digits, k=20))}"
-            cursor.execute("INSERT INTO keys (key, slots, used, created_at) VALUES (?, ?, ?, ?)", 
+            cursor.execute("INSERT INTO keys (key, slots, used, created_at) VALUES (?, ?, ?, ?)",
                            (new_key, slots, "[]", now))
             all_keys.append(new_key)
         conn.commit()
@@ -424,7 +567,7 @@ async def generate_key(interaction: discord.Interaction, slots: int, keys: int =
 async def cleanup_old_keys():
     await client.wait_until_ready()
     while not client.is_closed():
-        cutoff = time.time() - 6*60*60
+        cutoff = time.time() - 6*60*60  # 6 jam
         async with db_lock:
             cursor.execute("SELECT key FROM keys WHERE used = ? AND created_at < ?", ("[]", cutoff))
             old_keys = [row[0] for row in cursor.fetchall()]
@@ -432,16 +575,16 @@ async def cleanup_old_keys():
                 cursor.execute("DELETE FROM keys WHERE key = ?", (key,))
             if old_keys:
                 conn.commit()
-                print(f"Deleted old keys (1 menit test): {old_keys}")
-        await asyncio.sleep(10*60)
+                print(f"Deleted old keys: {old_keys}")
+        await asyncio.sleep(10*60)  # 10 menit
 
 # ---------- Message UI ----------
 async def message_bot(channel, refresh_interval=300):
-    
+
     message = None
-    
+
     async def build_view():
-    
+
         view = View(timeout=None)
         button_account = Button(label="Account Info", style=discord.ButtonStyle.secondary, emoji="ℹ️")
         button_premium = Button(label="Premium Info", style=discord.ButtonStyle.primary, emoji="⭐")
@@ -451,28 +594,36 @@ async def message_bot(channel, refresh_interval=300):
         # ------------- Account Info Callback -------------
         async def account_callback(interaction: discord.Interaction):
             uid = str(interaction.user.id)
-            
+
             async with db_lock:
                 cursor.execute("SELECT key, usernames FROM users WHERE user_id = ?", (uid,))
                 user_row = cursor.fetchone()
 
             if not user_row:
+                # show modal to add username+key
                 await interaction.response.send_modal(UsernameModal())
                 return
 
             key = user_row[0]
-            usernames = json.loads(user_row[1]) if user_row[1] else []
+            try:
+                usernames = json.loads(user_row[1]) if user_row[1] else []
+            except Exception:
+                usernames = []
 
             async with db_lock:
                 cursor.execute("SELECT slots, used FROM keys WHERE key = ?", (key,))
                 key_row = cursor.fetchone()
-                
+
             if not key_row:
                 await interaction.response.send_message(embed=error_embed("Key tidak ditemukan di database."), ephemeral=True)
                 return
 
             total_slots = key_row[0]
-            used_list = json.loads(key_row[1]) if key_row[1] else []
+            used_json = key_row[1] or "[]"
+            try:
+                used_list = json.loads(used_json)
+            except Exception:
+                used_list = []
             remaining_slots = total_slots - len(used_list)
             user_lines = "\n".join(f"{i+1}. {u}" for i, u in enumerate(usernames)) or " - "
 
@@ -480,7 +631,7 @@ async def message_bot(channel, refresh_interval=300):
                 "Info Akun Premium",
                 f"✅ Username Roblox:\n{user_lines}\n\n🔑 Key: `{key}`\n\n⭐ Sisa slot: {remaining_slots}"
             )
-            view2 = View()
+            view2 = View(timeout=None)
             if remaining_slots > 0:
                 add_btn = Button(label="Add Account", style=discord.ButtonStyle.success, emoji="➕")
 
@@ -505,13 +656,12 @@ async def message_bot(channel, refresh_interval=300):
         button_premium.callback = premium_callback
         button_manage.callback = manage_callback
         button_reset_key.callback = reset_key_callback
-        
 
         view.add_item(button_account)
         view.add_item(button_premium)
         view.add_item(button_manage)
         view.add_item(button_reset_key)
-        
+
         return view
 
     embed_main = make_embed(
@@ -521,13 +671,20 @@ async def message_bot(channel, refresh_interval=300):
     embed_main.add_field(name="**📌 Note:**", value="**Jika terpental dari premium, silahkan masukkan username roblox + key terlebih dahulu**", inline=False)
     embed_main.add_field(name="**⚠️ Warning:**", value="**Reset key hanya untuk premium yang ingin menambah slot akun, jika ingin reset key silahkan open ticket**", inline=False)
     embed_main.set_footer(text="Pastikan username roblox benar (format: username) tanpa @")
-    
-    message = await channel.send(embed=embed_main, view=await build_view())
-    
+
+    try:
+        message = await channel.send(embed=embed_main, view=await build_view())
+    except Exception as e:
+        print("Error sending main message:", e)
+        return
+
     while True:
         await asyncio.sleep(refresh_interval)
-        await message.edit(embed=embed_main, view=await build_view())
-        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Refreshed main message")
+        try:
+            await message.edit(embed=embed_main, view=await build_view())
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Refreshed main message")
+        except Exception as e:
+            print("Failed to refresh main message:", e)
 
 # ---------- on_ready ----------
 @client.event
