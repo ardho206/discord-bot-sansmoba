@@ -628,8 +628,11 @@ async def message_bot(channel, refresh_interval=300):
 
             if not user_row:
                 # show modal to add username+key fast
-                await interaction.response.send_modal(UsernameModal())
+                await interaction.response.defer(ephemeral=True)
+                await interaction.followup.send_modal(UsernameModal())
                 return
+
+            await interaction.response.defer(ephemeral=True)
 
             key = user_row[0]
             try:
@@ -668,7 +671,7 @@ async def message_bot(channel, refresh_interval=300):
                 add_btn.callback = add_callback
                 view2.add_item(add_btn)
 
-            await interaction.response.send_message(embed=embed, ephemeral=True, view=view2)
+            await interaction.followup.send_message(embed=embed, ephemeral=True, view=view2)
 
         async def premium_callback(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
