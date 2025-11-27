@@ -611,33 +611,31 @@ async def cleanup_old_keys():
 
 # ---------- Message UI ----------
 async def message_bot(channel, refresh_interval=300):
+
     message = None
 
     async def build_view():
+
         view = View(timeout=None)
         button_account = Button(label="Account Info", style=discord.ButtonStyle.secondary, emoji="ℹ️")
         button_premium = Button(label="Premium Info", style=discord.ButtonStyle.primary, emoji="⭐")
         button_manage = Button(label="Manage Accounts", style=discord.ButtonStyle.secondary, emoji="🛠️")
         button_reset_key = Button(label="Reset Key", style=discord.ButtonStyle.danger, emoji="🔄")
 
+        # ------------- Account Info Callback -------------
         async def account_callback(interaction: discord.Interaction):
             uid = str(interaction.user.id)
+
             async with db_lock:
                 cursor.execute("SELECT key, usernames FROM users WHERE user_id = ?", (uid,))
                 user_row = cursor.fetchone()
 
             if not user_row:
-                # show modal to add username+key fast
                 await interaction.response.send_modal(UsernameModal())
                 return
 
-            await interaction.response.defer(ephemeral=True)
-
             key = user_row[0]
-            try:
-                usernames = json.loads(user_row[1] or "[]")
-            except:
-                usernames = []
+            usernames = json.loads(user_row[1]) if user_row[1] else []
 
             async with db_lock:
                 cursor.execute("SELECT slots, used FROM keys WHERE key = ?", (key,))
@@ -648,11 +646,7 @@ async def message_bot(channel, refresh_interval=300):
                 return
 
             total_slots = key_row[0]
-            try:
-                used_list = json.loads(key_row[1] or "[]")
-            except:
-                used_list = []
-
+            used_list = json.loads(key_row[1]) if key_row[1] else []
             remaining_slots = total_slots - len(used_list)
             user_lines = "\n".join(f"{i+1}. {u}" for i, u in enumerate(usernames)) or " - "
 
@@ -660,7 +654,7 @@ async def message_bot(channel, refresh_interval=300):
                 "Info Akun Premium",
                 f"✅ Username Roblox:\n{user_lines}\n\n🔑 Key: `{key}`\n\n⭐ Sisa slot: {remaining_slots}"
             )
-            view2 = View(timeout=None)
+            view2 = View()
             if remaining_slots > 0:
                 add_btn = Button(label="Add Account", style=discord.ButtonStyle.success, emoji="➕")
 
@@ -670,10 +664,11 @@ async def message_bot(channel, refresh_interval=300):
                 add_btn.callback = add_callback
                 view2.add_item(add_btn)
 
-            await interaction.followup.send(embed=embed, ephemeral=True, view=view2)
+            await interaction.response.send_message(embed=embed, ephemeral=True, view=view2)
 
+        # ------------- Premium Info Callback -------------
         async def premium_callback(interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.defer(ephemeral=True)  # mark interaction alive
             embed = make_embed(
                 "Info Premium SansMoba",
                 "⭐ Instant fish X5\n\n🕘 Script tanpa limit\n\n🔗 Webhook discord\n\n🎁 Dan masih banyak lagi!"
@@ -685,10 +680,12 @@ async def message_bot(channel, refresh_interval=300):
         button_manage.callback = manage_callback
         button_reset_key.callback = reset_key_callback
 
+
         view.add_item(button_account)
         view.add_item(button_premium)
         view.add_item(button_manage)
         view.add_item(button_reset_key)
+        
         return view
 
     embed_main = make_embed(
@@ -699,20 +696,12 @@ async def message_bot(channel, refresh_interval=300):
     embed_main.add_field(name="**⚠️ Warning:**", value="**Reset key hanya untuk premium yang ingin menambah slot akun, jika ingin reset key silahkan open ticket**", inline=False)
     embed_main.set_footer(text="Pastikan username roblox benar (format: username) tanpa @")
 
-    try:
-        message = await channel.send(embed=embed_main, view=await build_view())
-    except Exception as e:
-        print("Error sending main message:", e)
-        return
+    message = await channel.send(embed=embed_main, view=await build_view())
 
     while True:
         await asyncio.sleep(refresh_interval)
-        try:
-            await message.edit(embed=embed_main, view=await build_view())
-            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Refreshed main message")
-        except Exception as e:
-            print("Failed to refresh main message:", e)
-
+        await message.edit(embed=embed_main, view=await build_view())
+        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Refreshed main message")
 
 # ---------- on_ready ----------
 @client.event
