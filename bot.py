@@ -240,7 +240,6 @@ class UsernameModal(Modal):
 
 # ---------------- Manage Callback ----------------
 async def manage_callback(interaction: discord.Interaction):
-    # quick DB reads before building view
     uid = str(interaction.user.id)
 
     async with db_lock:
@@ -253,7 +252,7 @@ async def manage_callback(interaction: discord.Interaction):
     key, usernames_json = user_row
     try:
         usernames = json.loads(usernames_json) if usernames_json else []
-    except Exception:
+    except:
         usernames = []
 
     async with db_lock:
@@ -266,13 +265,14 @@ async def manage_callback(interaction: discord.Interaction):
     total_slots = key_row[0]
     try:
         used_list = json.loads(key_row[1] or "[]")
-    except Exception:
+    except:
         used_list = []
 
     if not used_list:
         await interaction.response.send_message("Belum ada username yang bisa diedit.", ephemeral=True)
         return
 
+    # embed tetap sama, gua ga ubah
     def make_manage_embed():
         user_lines = "\n".join(f"{i+1}. {u}" for i, u in enumerate(used_list)) or " - "
         return make_embed(
@@ -280,26 +280,83 @@ async def manage_callback(interaction: discord.Interaction):
             f"✅ Username Roblox:\n{user_lines}\n\n🔑 Key: `{key}`\n\n⭐ Sisa slot: {total_slots - len(used_list)}\n\nPilih username untuk diedit:"
         )
 
-    view = View(timeout=None)
-    options = [discord.SelectOption(label=u, description=f"Edit username {u}") for u in used_list]
-    select = Select(placeholder="Pilih username", options=options, min_values=1, max_values=1)
+    # gunakan pagination view
+    view = ManagePagedView(key, used_list, page=0, embed_func=make_manage_embed)
 
-    # IMPORTANT: select callback must be instant (no DB/network) and only send modal
-    async def select_callback(inter: discord.Interaction):
-        try:
+    await interaction.response.send_message(
+        embed=make_manage_embed(),
+        ephemeral=True,
+        view=view
+    )
+
+class ManagePagedView(View):
+    PAGE_SIZE = 25
+
+    def __init__(self, key, usernames, page, embed_func):
+        super().__init__(timeout=None)
+        self.key = key
+        self.usernames = usernames
+        self.page = page
+        self.embed_func = embed_func
+
+        self.max_page = max(0, (len(usernames) - 1) // self.PAGE_SIZE)
+
+        self.add_dropdown()
+        self.add_nav_buttons()
+
+    # --- CREATE DROPDOWN BERDASARKAN PAGE ---
+    def add_dropdown(self):
+        start = self.page * self.PAGE_SIZE
+        end = start + self.PAGE_SIZE
+        sliced = self.usernames[start:end]
+
+        options = [
+            discord.SelectOption(label=u, description=f"Edit username {u}")
+            for u in sliced
+        ]
+
+        select = Select(
+            placeholder=f"Pilih username (page {self.page+1}/{self.max_page+1})",
+            options=options,
+            min_values=1,
+            max_values=1,
+        )
+
+        async def select_callback(inter: discord.Interaction):
             selected = inter.data["values"][0]
-        except Exception:
-            await inter.response.send_message(embed=error_embed("Tidak ada username yang dipilih!"), ephemeral=True)
-            return
+            await inter.response.send_modal(EditUsernameModal(self.key, selected))
 
-        # send modal IMMEDIATELY (no awaits before this)
-        await inter.response.send_modal(EditUsernameModal(key, selected))
+        select.callback = select_callback
+        self.add_item(select)
 
-    select.callback = select_callback
-    view.add_item(select)
+    # --- BUTTON NEXT & PREV ---
+    def add_nav_buttons(self):
+        prev_btn = Button(label="Prev", style=discord.ButtonStyle.secondary)
+        next_btn = Button(label="Next", style=discord.ButtonStyle.primary)
 
-    await interaction.response.send_message(embed=make_manage_embed(), ephemeral=True, view=view)
+        async def prev_callback(inter: discord.Interaction):
+            if self.page > 0:
+                self.page -= 1
+            await self.refresh(inter)
 
+        async def next_callback(inter: discord.Interaction):
+            if self.page < self.max_page:
+                self.page += 1
+            await self.refresh(inter)
+
+        prev_btn.callback = prev_callback
+        next_btn.callback = next_callback
+
+        self.add_item(prev_btn)
+        self.add_item(next_btn)
+
+    # --- REFRESH VIEW TANPA UBAH EMBED ---
+    async def refresh(self, inter: discord.Interaction):
+        new_view = ManagePagedView(self.key, self.usernames, self.page, self.embed_func)
+        await inter.response.edit_message(
+            embed=self.embed_func(),
+            view=new_view
+        )
 
 # ---------------- Edit Username Modal (cek repo2 & repo3) ----------------
 class EditUsernameModal(Modal):
