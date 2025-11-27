@@ -628,8 +628,7 @@ async def message_bot(channel, refresh_interval=300):
 
             if not user_row:
                 # show modal to add username+key fast
-                await interaction.response.defer(ephemeral=True)
-                await interaction.followup.send_modal(UsernameModal())
+                await interaction.response.send_modal(UsernameModal())
                 return
 
             await interaction.response.defer(ephemeral=True)
