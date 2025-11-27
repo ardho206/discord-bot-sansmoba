@@ -671,7 +671,7 @@ async def message_bot(channel, refresh_interval=300):
                 add_btn.callback = add_callback
                 view2.add_item(add_btn)
 
-            await interaction.followup.send_message(embed=embed, ephemeral=True, view=view2)
+            await interaction.followup.send(embed=embed, ephemeral=True, view=view2)
 
         async def premium_callback(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
