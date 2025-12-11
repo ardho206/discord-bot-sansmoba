@@ -15,6 +15,11 @@ from discord.ui import Button, View, Modal, TextInput, Select
 from discord import app_commands
 import aiohttp
 from dotenv import load_dotenv
+from messages import make_embed, error_embed, success_embed, main_embed, get_script
+from ticket import TicketHandler
+from helpers import HelperSystem
+from event_manager import EventManager
+from commands import register_commands
 
 load_dotenv()
 
@@ -29,6 +34,21 @@ FILE_PATH_3 = os.getenv("FILE_PATH_3")
 BRANCH = os.getenv("BRANCH", "main")
 GUILD_ID = int(os.getenv("GUILD_ID", "1360567703709941782"))
 ALLOWED_USERS = [1154602289097617450, 938692894410297414]
+
+HELPER = 1431927807579000894
+MODERATOR = 1360568672149831700
+DEVELOPER = 1436478558351523901
+OWNER = 1360569143350395012
+
+HELPER_PRICE_MAP = {
+    1: 35000,
+    2: 50000,
+    5: 100000,
+    10: 150000,
+    15: 200000
+}
+
+ALLOWED_ROLES = [HELPER, MODERATOR, DEVELOPER, OWNER]
 
 # ---------- DB load ----------
 DB_PATH = "/data/data.db"
@@ -131,7 +151,6 @@ class UsernameModal(Modal):
             self.add_item(self.key_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # defer karena ada operasi network + db
         await interaction.response.defer(ephemeral=True)
 
         username = self.username_input.value.strip()
@@ -142,7 +161,6 @@ class UsernameModal(Modal):
             await interaction.followup.send(embed=error_embed("Username atau Key kosong!"), ephemeral=True)
             return
 
-        # ambil key info (fast check)
         async with db_lock:
             cursor.execute("SELECT slots, used FROM keys WHERE key = ?", (key,))
             key_row = cursor.fetchone()
@@ -160,7 +178,6 @@ class UsernameModal(Modal):
             await interaction.followup.send(embed=error_embed("Slot key habis!"), ephemeral=True)
             return
 
-        # baca last_repo (determine target) - do NOT toggle yet
         async with db_lock:
             cursor.execute("SELECT last_repo FROM system_state WHERE id = 1")
             row = cursor.fetchone()
@@ -169,7 +186,6 @@ class UsernameModal(Modal):
         target_repo_idx = 2 if last_repo == 0 else 3
         new_last_repo = 1 if last_repo == 0 else 0
 
-        # perform github update to selected repo (under github_lock)
         async with github_lock:
             async with aiohttp.ClientSession() as session:
                 repo = REPO_2 if target_repo_idx == 2 else REPO_3
@@ -184,9 +200,7 @@ class UsernameModal(Modal):
                 old_content = decode_content_field(file_data)
                 lines = [l.strip() for l in old_content.splitlines() if l.strip()]
 
-                # append username if not exists (safety check)
                 if username in lines:
-                    # still proceed to DB update (maybe previous partial)
                     pass
                 else:
                     new_content = old_content + ("\n" if old_content and not old_content.endswith("\n") else "") + username
@@ -195,7 +209,6 @@ class UsernameModal(Modal):
                         await interaction.followup.send(embed=error_embed(f"Update github gagal (status {st})"), ephemeral=True)
                         return
 
-        # atomic DB update: re-check & update used and users and toggle system_state
         async with db_lock:
             cursor.execute("SELECT slots, used FROM keys WHERE key = ?", (key,))
             key_row2 = cursor.fetchone()
@@ -210,15 +223,12 @@ class UsernameModal(Modal):
                 used_now = []
 
             if len(used_now) >= slots2:
-                # somebody else took the slot meanwhile
                 await interaction.followup.send(embed=error_embed("Slot habis (sudah dipakai orang lain)"), ephemeral=True)
                 return
 
-            # append username
             used_now.append(username)
             cursor.execute("UPDATE keys SET used = ? WHERE key = ?", (json.dumps(used_now), key))
 
-            # update users table
             cursor.execute("SELECT usernames FROM users WHERE user_id = ?", (uid,))
             urow = cursor.fetchone()
             if urow:
@@ -231,7 +241,6 @@ class UsernameModal(Modal):
             else:
                 cursor.execute("INSERT INTO users (user_id, key, usernames) VALUES (?, ?, ?)", (uid, key, json.dumps([username])))
 
-            # toggle repo state because github update sudah sukses
             cursor.execute("UPDATE system_state SET last_repo = ? WHERE id = 1", (new_last_repo,))
             conn.commit()
 
@@ -240,53 +249,83 @@ class UsernameModal(Modal):
 
 # ---------------- Manage Callback ----------------
 async def manage_callback(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
     uid = str(interaction.user.id)
 
     async with db_lock:
         cursor.execute("SELECT key, usernames FROM users WHERE user_id = ?", (uid,))
         user_row = cursor.fetchone()
+
     if not user_row:
-        await interaction.response.send_message(embed=error_embed("Kamu belum menambahkan username premium!"), ephemeral=True)
+        await interaction.followup.send(
+            embed=error_embed("Kamu belum redeem key / belum punya username premium"),
+            ephemeral=True
+        )
         return
 
     key, usernames_json = user_row
     try:
-        usernames = json.loads(usernames_json) if usernames_json else []
+        usernames = json.loads(usernames_json or "[]")
     except:
         usernames = []
 
     async with db_lock:
         cursor.execute("SELECT slots, used FROM keys WHERE key = ?", (key,))
         key_row = cursor.fetchone()
+
     if not key_row:
-        await interaction.response.send_message(embed=error_embed("Key tidak ditemukan!"), ephemeral=True)
+        await interaction.followup.send(
+            embed=error_embed("Key tidak valid!"),
+            ephemeral=True
+        )
         return
 
-    total_slots = key_row[0]
+    total_slots, used_json = key_row
+
     try:
-        used_list = json.loads(key_row[1] or "[]")
+        used_list = json.loads(used_json or "[]")
     except:
         used_list = []
 
-    if not used_list:
-        await interaction.response.send_message("Belum ada username yang bisa diedit.", ephemeral=True)
-        return
+    remaining_slots = total_slots - len(used_list)
 
-    # embed tetap sama, gua ga ubah
-    def make_manage_embed():
-        user_lines = "\n".join(f"{i+1}. {u}" for i, u in enumerate(used_list)) or " - "
-        return make_embed(
-            "Manage Akun Premium",
-            f"✅ Username Roblox:\n{user_lines}\n\n🔑 Key: `{key}`\n\n⭐ Sisa slot: {total_slots - len(used_list)}\n\nPilih username untuk diedit:"
+    username_list_text = (
+        "\n".join(f"{i+1}. {u}" for i, u in enumerate(used_list))
+        if used_list else " - Belum ada username -"
+    )
+
+    embed = make_embed(
+        "Manage Akun Premium",
+        f"📌 **Daftar Username Roblox:**\n{username_list_text}\n\n"
+        f"🔑 Key: `{key}`\n"
+        f"⭐ Sisa Slot: {remaining_slots}\n\n"
+        f"Pilih username untuk diedit:"
+    )
+
+    final_view = ManagePagedView(
+        key=key,
+        usernames=used_list,
+        page=0,
+        embed_func=lambda: embed
+    )
+
+    if remaining_slots > 0:
+        btn_add = Button(
+            label="Add Account",
+            emoji="➕",
+            style=discord.ButtonStyle.success
         )
 
-    # gunakan pagination view
-    view = ManagePagedView(key, used_list, page=0, embed_func=make_manage_embed)
+        async def add_account_callback(inter: discord.Interaction):
+            await inter.response.send_modal(UsernameModal(key_slot=key))
 
-    await interaction.response.send_message(
-        embed=make_manage_embed(),
+        btn_add.callback = add_account_callback
+        final_view.add_item(btn_add)
+
+    await interaction.followup.send(
+        embed=embed,
         ephemeral=True,
-        view=view
+        view=final_view
     )
 
 class ManagePagedView(View):
@@ -304,7 +343,6 @@ class ManagePagedView(View):
         self.add_dropdown()
         self.add_nav_buttons()
 
-    # --- CREATE DROPDOWN BERDASARKAN PAGE ---
     def add_dropdown(self):
         start = self.page * self.PAGE_SIZE
         end = start + self.PAGE_SIZE
@@ -329,7 +367,6 @@ class ManagePagedView(View):
         select.callback = select_callback
         self.add_item(select)
 
-    # --- BUTTON NEXT & PREV ---
     def add_nav_buttons(self):
         prev_btn = Button(label="Prev", style=discord.ButtonStyle.secondary)
         next_btn = Button(label="Next", style=discord.ButtonStyle.primary)
@@ -350,7 +387,6 @@ class ManagePagedView(View):
         self.add_item(prev_btn)
         self.add_item(next_btn)
 
-    # --- REFRESH VIEW TANPA UBAH EMBED ---
     async def refresh(self, inter: discord.Interaction):
         new_view = ManagePagedView(self.key, self.usernames, self.page, self.embed_func)
         await inter.response.edit_message(
@@ -375,7 +411,6 @@ class EditUsernameModal(Modal):
             await interaction.followup.send(embed=error_embed("Username tidak boleh kosong!"), ephemeral=True)
             return
 
-        # ambil data key (fast)
         async with db_lock:
             cursor.execute("SELECT used FROM keys WHERE key = ?", (self.key,))
             row = cursor.fetchone()
@@ -395,7 +430,6 @@ class EditUsernameModal(Modal):
             await interaction.followup.send(embed=error_embed("Username lama tidak ada di key!"), ephemeral=True)
             return
 
-        # cari lokasi username di repo2 dulu, kalau nggak ada cek repo3
         target_repo = None
         target_path = None
         target_sha = None
@@ -403,7 +437,6 @@ class EditUsernameModal(Modal):
 
         async with github_lock:
             async with aiohttp.ClientSession() as session:
-                # repo2
                 file2, status2, err2 = await fetch_file(session, REPO_2, FILE_PATH_2, BRANCH)
                 if file2:
                     old2 = decode_content_field(file2)
@@ -414,7 +447,6 @@ class EditUsernameModal(Modal):
                         target_sha = file2.get("sha")
                         target_lines = lines2
 
-                # repo3 if not found
                 if target_repo is None:
                     file3, status3, err3 = await fetch_file(session, REPO_3, FILE_PATH_3, BRANCH)
                     if file3:
@@ -430,7 +462,6 @@ class EditUsernameModal(Modal):
                     await interaction.followup.send(embed=error_embed("Username lama tidak ditemukan di list manapun!"), ephemeral=True)
                     return
 
-                # replace and push
                 idx = target_lines.index(self.old_username)
                 target_lines[idx] = new_username
                 new_content = "\n".join(target_lines)
@@ -440,7 +471,6 @@ class EditUsernameModal(Modal):
                     await interaction.followup.send(embed=error_embed("Gagal update github!"), ephemeral=True)
                     return
 
-        # now atomic DB update for keys/users
         async with db_lock:
             cursor.execute("SELECT used FROM keys WHERE key = ?", (self.key,))
             r = cursor.fetchone()
@@ -452,7 +482,6 @@ class EditUsernameModal(Modal):
             except:
                 used_now = []
 
-            # swap username
             if self.old_username in used_now:
                 used_now[used_now.index(self.old_username)] = new_username
             else:
@@ -531,7 +560,6 @@ class ResetKeyModal(Modal):
                 await interaction.followup.send(embed=error_embed(f"Jumlah username lama ({len(usernames)}) melebihi slot key baru ({slots})!"), ephemeral=True)
                 return
 
-            # update key baru
             cursor.execute("UPDATE keys SET used = ? WHERE key = ?", (json.dumps(usernames), new_key))
             cursor.execute("UPDATE users SET key = ? WHERE user_id = ?", (new_key, uid))
             conn.commit()
@@ -556,58 +584,60 @@ async def reset_key_callback(interaction: discord.Interaction):
 class MyClient(discord.Client):
     async def setup_hook(self):
         asyncio.create_task(cleanup_old_keys())
-
+        
 intents = discord.Intents.default()
+intents.guilds = True
+intents.messages = True
+intents.guild_messages = True
 intents.message_content = True
+intents.members = True
+
 client = MyClient(intents=intents)
 tree = app_commands.CommandTree(client)
-
-# ---------- generate-key slash ----------
-@tree.command(name="generate-key", description="Generate key premium", guild=discord.Object(id=GUILD_ID))
-async def generate_key(interaction: discord.Interaction, slots: int, keys: int = 1):
-    if interaction.user.id not in ALLOWED_USERS:
-        await interaction.response.send_message(embed=error_embed("Kamu tidak punya akses!"), ephemeral=True)
-        print(f"Unauthorized user: @{interaction.user.display_name} id: {interaction.user.id}")
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    all_keys = []
-    async with db_lock:
-        now = time.time()
-        for _ in range(keys):
-            new_key = f"SansPrem_{''.join(random.choices(string.ascii_letters + string.digits, k=20))}"
-            cursor.execute("INSERT INTO keys (key, slots, used, created_at) VALUES (?, ?, ?, ?)",
-                           (new_key, slots, "[]", now))
-            all_keys.append(new_key)
-        conn.commit()
-
-    embed_key = discord.Embed(title="Keys Generated", color=0xA64DFF)
-    embed_key.add_field(name="🔑 Keys:", value="\n".join(all_keys) or "-", inline=False)
-    embed_key.add_field(name="🎟 Slots:", value=f"{slots}", inline=False)
-    embed_key.add_field(name="👤 Admin:", value=f"<@{interaction.user.id}>", inline=False)
-    await interaction.followup.send(embed=embed_key, ephemeral=True)
-
-    print(f"Generated keys by user @{interaction.user.display_name} id: {interaction.user.id}:")
-    for k in all_keys:
-        print(k)
-
 
 # ---------- Background Task ----------
 async def cleanup_old_keys():
     await client.wait_until_ready()
-    while not client.is_closed():
-        cutoff = time.time() - 6*60*60  # 6 jam
-        async with db_lock:
-            cursor.execute("SELECT key FROM keys WHERE used = ? AND created_at < ?", ("[]", cutoff))
-            old_keys = [row[0] for row in cursor.fetchall()]
-            for key in old_keys:
-                cursor.execute("DELETE FROM keys WHERE key = ?", (key,))
-            if old_keys:
-                conn.commit()
-                print(f"Deleted old keys: {old_keys}")
-        await asyncio.sleep(10*60)  # 10 menit
 
+    log_channel = client.get_channel(1448631336398225501)
+    if not log_channel:
+        print("log channel ga ketemu, cek ID nya")
+    
+    while not client.is_closed():
+
+        cutoff = time.time() - (30 * 60)  # 30 menit
+
+        async with db_lock:
+            cursor.execute(
+                "SELECT key, slots, created_at FROM keys WHERE used = ? AND created_at < ?",
+                ("[]", cutoff)
+            )
+            old_rows = cursor.fetchall()
+
+            if old_rows:
+                cursor.executemany("DELETE FROM keys WHERE key = ?", [(r[0],) for r in old_rows])
+                conn.commit()
+
+        # kirim log klo ada
+        if old_rows and log_channel:
+            import datetime
+
+            lines = []
+            for k, s, ts in old_rows:
+                tgl = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+                lines.append(f"`{k}` | Slot **{s}** | dibuat {tgl}")
+
+            embed = discord.Embed(
+                title="🗑️ Expired Keys Deleted",
+                description="\n".join(lines),
+                color=0xFF5555
+            )
+            embed.set_footer(text="Auto Cleanup • 30 menit")
+
+            await log_channel.send(embed=embed)
+
+            print("deleted old keys:", [r[0] for r in old_rows])
+        await asyncio.sleep(10*60)  # 10 menit
 
 # ---------- Message UI ----------
 async def message_bot(channel, refresh_interval=300):
@@ -617,13 +647,13 @@ async def message_bot(channel, refresh_interval=300):
     async def build_view():
 
         view = View(timeout=None)
-        button_account = Button(label="Account Info", style=discord.ButtonStyle.secondary, emoji="ℹ️")
-        button_premium = Button(label="Premium Info", style=discord.ButtonStyle.primary, emoji="⭐")
-        button_manage = Button(label="Manage Accounts", style=discord.ButtonStyle.secondary, emoji="🛠️")
-        button_reset_key = Button(label="Reset Key", style=discord.ButtonStyle.danger, emoji="🔄")
+        button_redeem = Button(label="🔑 Redeem Key", style=discord.ButtonStyle.success)
+        button_script = Button(label="📜 Get Script", style=discord.ButtonStyle.primary)
+        button_manage = Button(label="🔒 Manage Account", style=discord.ButtonStyle.secondary)
+        button_reset_key = Button(label="🔄 Reset Key", style=discord.ButtonStyle.danger)
 
         # ------------- Account Info Callback -------------
-        async def account_callback(interaction: discord.Interaction):
+        async def redeem_callback(interaction: discord.Interaction):
             uid = str(interaction.user.id)
 
             async with db_lock:
@@ -633,75 +663,49 @@ async def message_bot(channel, refresh_interval=300):
             if not user_row:
                 await interaction.response.send_modal(UsernameModal())
                 return
-
-            key = user_row[0]
-            usernames = json.loads(user_row[1]) if user_row[1] else []
-
-            async with db_lock:
-                cursor.execute("SELECT slots, used FROM keys WHERE key = ?", (key,))
-                key_row = cursor.fetchone()
-
-            if not key_row:
-                await interaction.response.send_message(embed=error_embed("Key tidak ditemukan di database."), ephemeral=True)
-                return
-
-            total_slots = key_row[0]
-            used_list = json.loads(key_row[1]) if key_row[1] else []
-            remaining_slots = total_slots - len(used_list)
-            user_lines = "\n".join(f"{i+1}. {u}" for i, u in enumerate(usernames)) or " - "
-
-            embed = make_embed(
-                "Info Akun Premium",
-                f"✅ Username Roblox:\n{user_lines}\n\n🔑 Key: `{key}`\n\n⭐ Sisa slot: {remaining_slots}"
+            
+            redeem_em = discord.Embed(
+                title="Error",
+                description="Kamu sudah redeem key!",
+                color=0xED4245
             )
-            view2 = View()
-            if remaining_slots > 0:
-                add_btn = Button(label="Add Account", style=discord.ButtonStyle.success, emoji="➕")
 
-                async def add_callback(inter: discord.Interaction):
-                    await inter.response.send_modal(UsernameModal(key_slot=key))
+            await interaction.response.defer(ephemeral=True)
+            await interaction.followup.send(embed=redeem_em, ephemeral=True)
+            
+        # ------------- Script Callback -------------
+        async def script_callback(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            await interaction.followup.send(content=get_script(), ephemeral=True)
 
-                add_btn.callback = add_callback
-                view2.add_item(add_btn)
-
-            await interaction.response.send_message(embed=embed, ephemeral=True, view=view2)
-
-        # ------------- Premium Info Callback -------------
-        async def premium_callback(interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=True)  # mark interaction alive
-            embed = make_embed(
-                "Info Premium SansMoba",
-                "⭐ Instant fish X5\n\n🕘 Script tanpa limit\n\n🔗 Webhook discord\n\n🎁 Dan masih banyak lagi!"
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
-        button_account.callback = account_callback
-        button_premium.callback = premium_callback
+        button_redeem.callback = redeem_callback
+        button_script.callback = script_callback
         button_manage.callback = manage_callback
         button_reset_key.callback = reset_key_callback
 
-
-        view.add_item(button_account)
-        view.add_item(button_premium)
+        view.add_item(button_redeem)
+        view.add_item(button_script)
         view.add_item(button_manage)
         view.add_item(button_reset_key)
         
         return view
 
-    embed_main = make_embed(
-        "SansMoba Premium",
-        "• Klik **Account Info** untuk tambah dan info username premium\n• Klik **Premium Info** untuk melihat fitur\n• Klik **Manage Accounts** untuk reset username\n• Klik **Reset Key** untuk reset key\n",
-    )
-    embed_main.add_field(name="**📌 Note:**", value="**Jika terpental dari premium, silahkan masukkan username roblox + key terlebih dahulu**", inline=False)
-    embed_main.add_field(name="**⚠️ Warning:**", value="**Reset key hanya untuk premium yang ingin menambah slot akun, jika ingin reset key silahkan open ticket**", inline=False)
-    embed_main.set_footer(text="Pastikan username roblox benar (format: username) tanpa @")
-
-    message = await channel.send(embed=embed_main, view=await build_view())
+    message = await channel.send(embed=main_embed(), view=await build_view())
 
     while True:
         await asyncio.sleep(refresh_interval)
-        await message.edit(embed=embed_main, view=await build_view())
+        await message.edit(embed=main_embed(), view=await build_view())
         print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Refreshed main message")
+        
+# ---------- Bots Command ------------
+register_commands(tree, cursor, conn)
+
+# ---------- Ticket Handler Init ----------
+ticket_handler = TicketHandler(client, log_channel_id=1447936813338591382)
+helper_system = HelperSystem(client, cursor, conn)
+
+# ----------- Events Manager -----------
+event_manager = EventManager(client, ticket_handler, helper_system)
 
 # ---------- on_ready ----------
 @client.event
@@ -718,7 +722,19 @@ async def on_ready():
         client.loop.create_task(message_bot(channel))
     except Exception as e:
         print("Error sending main message:", e)
+        
+    try:
+        await event_manager.system_ready()
+    except Exception as e:
+        print("Error initializing event manager:", e)
 
+@client.event
+async def on_message(message):
+    await event_manager.on_message(message)
+    
+@client.event
+async def on_thread_create(thread):
+    await event_manager.on_thread_create(thread)
 
 # --- Run ---
 if __name__ == "__main__":
