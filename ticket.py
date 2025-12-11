@@ -58,12 +58,12 @@ class TicketHandler:
             )
         )
 
-        embed.add_field(name="<:approved:1448597546422374535> **Opened By:**", value=f"<:reply:1448239575305551922>{opener_member.mention}", inline=True)
-        embed.add_field(name="<:denied:1448597526222606387> **Closed By:**", value=f"<:reply:1448239575305551922>{staff_user.mention}", inline=True)
+        embed.add_field(name="<:approved:1448228219185791047> **Opened By:**", value=f"<:reply:1448239575305551922>{opener_member.mention}", inline=True)
+        embed.add_field(name="<:denied:1448205814371319884> **Closed By:**", value=f"<:reply:1448239575305551922>{staff_user.mention}", inline=True)
         
         embed.add_field(name="", value=f"Ticket ID: `{thread.name}`", inline=False)
         embed.add_field(name="", value=f"Reason: **{reason}**", inline=False)
-        embed.set_footer(text="<:sansmoba:1448600059741732874> SansMoba Premium — Ticket System")
+        embed.set_footer(text="<:sansmoba:1448653387867361352> SansMoba Premium — Ticket System")
 
         view = View()
         view.add_item(Button(label="Lihat Ticket", url=thread.jump_url, emoji="<:done:1448597504219287552>"))
