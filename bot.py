@@ -599,7 +599,7 @@ tree = app_commands.CommandTree(client)
 async def cleanup_old_keys():
     await client.wait_until_ready()
 
-    log_channel = client.get_channel(1448631336398225501)
+    log_channel = client.get_channel(1450939685701685401)
     if not log_channel:
         print("log channel ga ketemu, cek ID nya")
     
