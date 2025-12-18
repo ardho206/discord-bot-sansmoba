@@ -8,7 +8,7 @@ from helpers import HELPER_PRICE_MAP
 from helpers import ALLOWED_ROLES_ID
 
 GUILD_ID = 1360567703709941782
-OWNER_ID = 938692894410297414
+OWNER_ID = [938692894410297414, 1154602289097617450]
 LOG_CHANNEL_ID = 1450939685701685401
 
 def register_commands(tree, cursor, conn):
@@ -23,7 +23,7 @@ def register_commands(tree, cursor, conn):
 
         uid = str(interaction.user.id)
 
-        if interaction.user.id == OWNER_ID:
+        if interaction.user.id in OWNER_ID:
             all_keys = []
             now = time.time()
 
@@ -143,7 +143,7 @@ def register_commands(tree, cursor, conn):
     async def key_check(interaction: discord.Interaction, key: str):
         await interaction.response.defer(ephemeral=True)
 
-        if interaction.user.id != OWNER_ID:
+        if interaction.user.id not in OWNER_ID:
             em = discord.Embed(
                 title="❌  Error",
                 description="Kamu tidak memiliki akses",
@@ -220,7 +220,7 @@ def register_commands(tree, cursor, conn):
     async def delete_key(interaction: discord.Interaction, key: str):
         await interaction.response.defer(ephemeral=True)
 
-        if interaction.user.id != OWNER_ID:
+        if interaction.user.id not in OWNER_ID:
             em = discord.Embed(
                 title="❌  Error",
                 description="Kamu tidak memiliki akses",
@@ -262,7 +262,7 @@ def register_commands(tree, cursor, conn):
     async def delete_username(interaction: discord.Interaction, key: str, username: str):
         await interaction.response.defer(ephemeral=True)
 
-        if interaction.user.id != OWNER_ID:
+        if interaction.user.id not in OWNER_ID:
             em = discord.Embed(
                 title="error",
                 description="kamu tidak memiliki akses",
