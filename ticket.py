@@ -4,7 +4,7 @@ from messages import ticket_message, closed_ticket
 from discord.ui import Button, View
 
 class TicketHandler:
-    def __init__(self, client, log_channel_id, parent_channel="【🎫】・ticket"):
+    def __init__(self, client, log_channel_id, parent_channel="【🎫】・create-ticket"):
         self.client = client
         self.log_channel_id = log_channel_id
         self.parent_name = parent_channel
