@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS system_state (
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXIST helper_limits (
+CREATE TABLE IF NOT EXISTS helper_limits (
     discord_id INTEGER PRIMARY KEY,
     used_count INTEGER DEFAULT 0,
     updated_at INTEGER
