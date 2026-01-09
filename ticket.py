@@ -16,40 +16,27 @@ class TicketHandler:
         print("Ticket Handler ready")
         
     async def handle_ticket(self, channel: discord.TextChannel):
-        if not isinstance(channel, discord.TextChannel):
+        if not channel.name.startswith("ticket-"):
             return
         
         if not channel.category or channel.category.name != self.parent_category:
             return
 
-        if not channel.name.startswith("ticket-"):
-            return
 
         await asyncio.sleep(2)
 
-        try:
-            async for msg in channel.history(limit=10):
-                if msg.author == self.client.user:
+        async for msg in channel.history(limit=5, oldest_first=True):
+            if msg.author.bot and msg.embeds:
+                embed = msg.embeds[0]
+                
+                if "Purchase" in embed.description or "purchase" in embed.description.lower():
+                    text, embed_reply = ticket_message()
+                    await channel.send(content=text, embed=embed_reply)
+                    
+                    role = discord.utils.get(channel.guild.roles, id=SUPPORT_ROLE_ID)
+                    if role:
+                        await channel.send(f"{role.mention}")
                     return
-                
-            first_msg = None
-            async for msg in channel.history(limit=5, oldest_first=True):
-                if msg.author.bot:
-                    first_msg = msg
-                    break
-                
-            if not first_msg:
-                return
+                    
             
-            content = (first_msg.content or "").lower()
-            
-            if "Purchase!" in content or "purchase!" in content:
-                role = channel.guild.get_role(SUPPORT_ROLE_ID)
-                mention = role.mention if role else ""
-                
-                text, embed = ticket_message()
-                await channel.send(content=f"{mention}\n{text}", embed=embed)
-                
-        except Exception as e:
-            print("Error handling ticket:", e)
         

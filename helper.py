@@ -10,10 +10,12 @@ def get_helper_usage(cursor, discord_id: int):
     row = cursor.fetchone()
     return row[0] if row else 0
 
-def increment_helper_usage(cursor, discord_id: int):
+def increment_helper_usage(cursor, discord_id: int, amount: int):
+    now = int(time.time())
     cursor.execute("""
         INSERT INTO helper_limits (discord_id, used_count)
-        VALUES (?, 1)               
+        VALUES (?, ?)               
         ON CONFLICT (discord_id) 
-        DO UPDATE SET used_count = used_count + 1
-    """, (discord_id,))
+        DO UPDATE SET
+            used_count = used_count + ?,
+    """, (discord_id, amount, amount))

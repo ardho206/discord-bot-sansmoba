@@ -88,7 +88,7 @@ def register_commands(tree, cursor, conn):
             )
             all_keys.append(new_key)
 
-        increment_helper_usage(cursor, uid)
+        increment_helper_usage(cursor, uid, keys)
 
         conn.commit()
 
