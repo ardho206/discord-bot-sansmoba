@@ -17,7 +17,6 @@ import aiohttp
 from dotenv import load_dotenv
 from messages import make_embed, error_embed, success_embed, main_embed, get_script
 from ticket import TicketHandler
-from helpers import HelperSystem
 from event_manager import EventManager
 from commands import register_commands
 
@@ -605,7 +604,7 @@ async def cleanup_old_keys():
     
     while not client.is_closed():
 
-        cutoff = time.time() - (30 * 60)  # 30 menit
+        cutoff = time.time() - (24 * 60 * 60)  # 30 menit
 
         async with db_lock:
             cursor.execute(
@@ -637,7 +636,7 @@ async def cleanup_old_keys():
             await log_channel.send(embed=embed)
 
             print("deleted old keys:", [r[0] for r in old_rows])
-        await asyncio.sleep(10*60)  # 10 menit
+        await asyncio.sleep(24*60*60)  # 10 menit
 
 # ---------- Message UI ----------
 async def message_bot(channel, refresh_interval=300):
@@ -702,10 +701,9 @@ register_commands(tree, cursor, conn)
 
 # ---------- Ticket Handler Init ----------
 ticket_handler = TicketHandler(client, log_channel_id=1447936813338591382)
-helper_system = HelperSystem(client, cursor, conn)
 
 # ----------- Events Manager -----------
-event_manager = EventManager(client, ticket_handler, helper_system)
+event_manager = EventManager(client, ticket_handler)
 
 # ---------- on_ready ----------
 @client.event
@@ -729,11 +727,8 @@ async def on_ready():
         print("Error initializing event manager:", e)
 
 @client.event
-async def on_message(message):
-    await event_manager.on_message(message)
-    
-@client.event
 async def on_guild_channel_create(channel):
+    print("channel create:", channel.name)
     await event_manager.on_channel_create(channel)
 
 # --- Run ---
