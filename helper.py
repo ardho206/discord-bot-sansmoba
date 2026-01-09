@@ -17,5 +17,5 @@ def increment_helper_usage(cursor, discord_id: int, amount: int):
         VALUES (?, ?)               
         ON CONFLICT (discord_id) 
         DO UPDATE SET
-            used_count = used_count + ?,
+            used_count = used_count + ?
     """, (discord_id, amount, amount))
