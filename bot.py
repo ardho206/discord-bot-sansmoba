@@ -146,26 +146,6 @@ def decode_content_field(file_data):
     except Exception:
         return ""
     
-def get_helper_usage(discord_id: int):
-    cursor.execute(
-        "SELECT used_count FROM helper_limits WHERE discord_id = ?",
-        (discord_id,)
-    )
-    row = cursor.fetchone()
-    return row[0] if row else 0
-
-def increment_helper_usage(discord_id: int, amount: int):
-    now = int(time.time())
-    cursor.execute("""
-        INSERT INTO helper_limits (discord_id, used_count, updated_at)
-        VALUES (?, ?, ?)               
-        ON CONFLICT (discord_id) 
-        DO UPDATE SET
-            used_count = used_count + ?,
-            updated_at = ?
-    """, (discord_id, amount, now, amount, now))
-    conn.commit()
-
 # ---------- Modal: Tambah Username ----------
 class UsernameModal(Modal):
     def __init__(self, key_slot=None):

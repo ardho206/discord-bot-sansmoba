@@ -3,7 +3,7 @@ import random
 import string
 import time
 import json
-from bot import get_helper_usage, increment_helper_usage
+from helper import get_helper_usage, increment_helper_usage
 
 ALLOWED_ROLES_ID = [
     1431927807579000894, 
@@ -67,7 +67,8 @@ def register_commands(tree, cursor, conn):
             await interaction.followup.send(embed=em, ephemeral=True)
             return
 
-        used = get_helper_usage(uid)
+        used = get_helper_usage(cursor, uid)
+
         if used + keys >= HELPER_LIMIT:
             em = discord.Embed(
                 title="❌ Limit",
@@ -87,7 +88,7 @@ def register_commands(tree, cursor, conn):
             )
             all_keys.append(new_key)
 
-        increment_helper_usage(uid, keys)
+        increment_helper_usage(cursor, uid)
 
         conn.commit()
 
