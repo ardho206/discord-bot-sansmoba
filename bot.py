@@ -632,7 +632,7 @@ async def cleanup_old_keys():
                 description="\n".join(lines),
                 color=0xFF5555
             )
-            embed.set_footer(text="Auto Cleanup • 30 menit")
+            embed.set_footer(text="Auto Cleanup • Sans Premium")
 
             await log_channel.send(embed=embed)
 
@@ -733,8 +733,8 @@ async def on_message(message):
     await event_manager.on_message(message)
     
 @client.event
-async def on_thread_create(thread):
-    await event_manager.on_thread_create(thread)
+async def on_guild_channel_create(channel):
+    await event_manager.on_channel_create(channel)
 
 # --- Run ---
 if __name__ == "__main__":

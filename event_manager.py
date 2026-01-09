@@ -7,8 +7,8 @@ class EventManager:
         self.ticket_handler = ticket_handler
         self.helper_system = helper_system
         
-    async def on_thread_create(self, thread):
-        await self.ticket_handler.handle_thread(thread)
+    async def on_channel_create(self, thread):
+        await self.ticket_handler.handle_ticket(thread)
 
     async def on_message(self, message):
         if message.author.bot:

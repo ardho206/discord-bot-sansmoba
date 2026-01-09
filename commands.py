@@ -4,7 +4,6 @@ import string
 import time
 import json
 
-from helpers import HELPER_PRICE_MAP
 from helpers import ALLOWED_ROLES_ID
 
 GUILD_ID = 1360567703709941782
@@ -60,38 +59,6 @@ def register_commands(tree, cursor, conn):
             await interaction.followup.send(embed=em, ephemeral=True)
             return
 
-        harga_per_key = HELPER_PRICE_MAP.get(slots)
-        if not harga_per_key:
-            em = discord.Embed(
-                title="error",
-                description=f"slots {slots} tidak tersedia",
-                color=0xFF0000
-            )
-            await interaction.followup.send(embed=em, ephemeral=True)
-            return
-
-        cursor.execute("SELECT saldo FROM helpers WHERE user_id = ?", (uid,))
-        r = cursor.fetchone()
-        saldo = r[0] if r else 0
-
-        total_cost = keys * harga_per_key
-        if saldo < total_cost:
-            em = discord.Embed(
-                title="gagal",
-                description=f"saldo tidak cukup!\nbutuh **{total_cost:,}**",
-                color=0xFF0000
-            )
-            await interaction.followup.send(embed=em, ephemeral=True)
-            return
-
-        new_saldo = saldo - total_cost
-        cursor.execute(
-            "INSERT INTO helpers(user_id, saldo) VALUES (?, ?) "
-            "ON CONFLICT(user_id) DO UPDATE SET saldo = excluded.saldo",
-            (uid, new_saldo)
-        )
-        conn.commit()
-
         all_keys = []
         now = time.time()
 
@@ -129,7 +96,6 @@ def register_commands(tree, cursor, conn):
         )
         embed_key.add_field(name="🧩  Keys", value="\n".join(all_keys), inline=False)
         embed_key.add_field(name="🎟️  Slots", value=str(slots), inline=True)
-        embed_key.add_field(name="💰  Sisa saldo", value=f"{new_saldo:,}", inline=True)
         embed_key.add_field(name="👤  Admin", value=interaction.user.mention, inline=False)
         embed_key.set_footer(text="SansMoba System • premium key generator")
 
@@ -143,7 +109,8 @@ def register_commands(tree, cursor, conn):
     async def key_check(interaction: discord.Interaction, key: str):
         await interaction.response.defer(ephemeral=True)
 
-        if interaction.user.id not in OWNER_ID:
+        user_roles = [r.id for r in interaction.user.roles]
+        if not any(role in user_roles for role in ALLOWED_ROLES_ID):
             em = discord.Embed(
                 title="❌  Error",
                 description="Kamu tidak memiliki akses",

@@ -4,27 +4,28 @@ from messages import ticket_message, closed_ticket
 from discord.ui import Button, View
 
 class TicketHandler:
-    def __init__(self, client, log_channel_id, parent_channel="【🎫】・create-ticket"):
+    def __init__(self, client, log_channel_id, parent_category="【🎫】・create-ticket"):
         self.client = client
         self.log_channel_id = log_channel_id
-        self.parent_name = parent_channel
+        self.parent_category = parent_category
 
     async def on_ready(self):
         print("Ticket Handler ready")
         
-    async def handle_thread(self, thread):
-        parent = thread.parent
-        if not parent or parent.name != self.parent_name:
+    async def handle_ticket(self, channel: discord.TextChannel):
+        if not isinstance(channel, discord.TextChannel):
+            return
+        
+        if not channel.category or channel.category.name != self.parent_category:
             return
 
-        if not thread.name.startswith("ticket-"):
+        if not channel.name.startswith("ticket-"):
             return
 
-        await thread.join()
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
 
         text, embed = ticket_message()
-        await thread.send(content=text, embed=embed)
+        await channel.send(content=text, embed=embed)
         
     async def handle_ticket_message(self, message):
         channel = message.channel
