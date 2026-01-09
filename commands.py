@@ -3,12 +3,18 @@ import random
 import string
 import time
 import json
+from bot import get_helper_usage, increment_helper_usage
 
-from helpers import ALLOWED_ROLES_ID
+ALLOWED_ROLES_ID = [
+    1431927807579000894, 
+    1360568672149831700
+]
 
 GUILD_ID = 1360567703709941782
 OWNER_ID = [938692894410297414, 1154602289097617450]
 LOG_CHANNEL_ID = 1450939685701685401
+
+HELPER_LIMIT = 10
 
 def register_commands(tree, cursor, conn):
 
@@ -20,11 +26,12 @@ def register_commands(tree, cursor, conn):
     async def generate_key(interaction: discord.Interaction, slots: int, keys: int = 1):
         await interaction.response.defer(ephemeral=True)
 
-        uid = str(interaction.user.id)
+        uid = interaction.user.id
+        now = time.time()
 
-        if interaction.user.id in OWNER_ID:
+        # ================= OWNER MODE =================
+        if uid in OWNER_ID:
             all_keys = []
-            now = time.time()
 
             for _ in range(keys):
                 new_key = f"SansPrem_{''.join(random.choices(string.ascii_letters + string.digits, k=20))}"
@@ -49,6 +56,7 @@ def register_commands(tree, cursor, conn):
             await interaction.followup.send(embed=embed_key, ephemeral=True)
             return
 
+        # ================= HELPER MODE =================
         user_roles = [r.id for r in interaction.user.roles]
         if not any(role in user_roles for role in ALLOWED_ROLES_ID):
             em = discord.Embed(
@@ -59,8 +67,17 @@ def register_commands(tree, cursor, conn):
             await interaction.followup.send(embed=em, ephemeral=True)
             return
 
+        used = get_helper_usage(uid)
+        if used + keys >= HELPER_LIMIT:
+            em = discord.Embed(
+                title="❌ Limit",
+                description=f"Limit habis! {used}/{HELPER_LIMIT}",
+                color=0xFF0000
+            )
+            await interaction.followup.send(embed=em, ephemeral=True)
+            return
+
         all_keys = []
-        now = time.time()
 
         for _ in range(keys):
             new_key = f"SansPrem_{''.join(random.choices(string.ascii_letters + string.digits, k=20))}"
@@ -69,6 +86,8 @@ def register_commands(tree, cursor, conn):
                 (new_key, slots, "[]", now)
             )
             all_keys.append(new_key)
+
+        increment_helper_usage(uid, keys)
 
         conn.commit()
 
@@ -80,6 +99,7 @@ def register_commands(tree, cursor, conn):
                     f"👤 **Helper:** {interaction.user.mention}\n"
                     f"🎟️ **Slots per key:** `{slots}`\n"
                     f"🔑 **Jumlah key:** `{keys}`\n"
+                    f"⌛ **Limit:** `{HELPER_LIMIT - (used + keys)}`\n"
                     f"📝 **Daftar key:**\n" + "\n".join(f"`{k}`" for k in all_keys)
                 ),
                 color=0x2ECC71
@@ -97,6 +117,7 @@ def register_commands(tree, cursor, conn):
         embed_key.add_field(name="🧩  Keys", value="\n".join(all_keys), inline=False)
         embed_key.add_field(name="🎟️  Slots", value=str(slots), inline=True)
         embed_key.add_field(name="👤  Admin", value=interaction.user.mention, inline=False)
+        embed_key.add_field(name="⌛  Limit", value=f"{HELPER_LIMIT - (used + keys)}/{HELPER_LIMIT}", inline=True)
         embed_key.set_footer(text="SansMoba System • premium key generator")
 
         await interaction.followup.send(embed=embed_key, ephemeral=True)
@@ -304,6 +325,43 @@ def register_commands(tree, cursor, conn):
         em = discord.Embed(
             title="berhasil",
             description=f"username `{username}` berhasil dihapus dari key `{key}`",
+            color=0x00FF00
+        )
+        await interaction.followup.send(embed=em, ephemeral=True)
+        
+    @tree.command(
+        name="reset",
+        description="Reset limit helper",
+        guild=discord.Object(id=GUILD_ID)
+    )
+    async def reset_limit(interaction: discord.Interaction, target: discord.Member):
+        await interaction.response.defer(ephemeral=True)
+
+        if interaction.user.id not in OWNER_ID:
+            em = discord.Embed(
+                title="❌  Error",
+                description="Kamu tidak memiliki akses",
+                color=0xFF0000
+            )
+            await interaction.followup.send(embed=em, ephemeral=True)
+            return
+
+        now = int(time.time())
+
+        cursor.execute("""
+            INSERT INTO helper_limits (discord_id, used_count, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT (discord_id) 
+            DO UPDATE SET
+                used_count = 0,
+                updated_at = ?
+        """, (target.id, 0, now, now))
+
+        conn.commit()
+
+        em = discord.Embed(
+            title="🎉  Success",
+            description=f"Limit helper untuk {target.mention} berhasil direset",
             color=0x00FF00
         )
         await interaction.followup.send(embed=em, ephemeral=True)

@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS system_state (
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXIST helper_limits (
+    discord_id INTEGER PRIMARY KEY,
+    used_count INTEGER DEFAULT 0,
+    updated_at INTEGER
+)           
+""")
+
 cursor.execute("INSERT OR IGNORE INTO system_state (id,last_repo) VALUES (1,0)")
 conn.commit()
 
@@ -137,6 +145,26 @@ def decode_content_field(file_data):
         return ""
     except Exception:
         return ""
+    
+def get_helper_usage(discord_id: int):
+    cursor.execute(
+        "SELECT used_count FROM helper_limits WHERE discord_id = ?",
+        (discord_id,)
+    )
+    row = cursor.fetchone()
+    return row[0] if row else 0
+
+def increment_helper_usage(discord_id: int, amount: int):
+    now = int(time.time())
+    cursor.execute("""
+        INSERT INTO helper_limits (discord_id, used_count, updated_at)
+        VALUES (?, ?, ?)               
+        ON CONFLICT (discord_id) 
+        DO UPDATE SET
+            used_count = used_count + ?,
+            updated_at = ?
+    """, (discord_id, amount, now, amount, now))
+    conn.commit()
 
 # ---------- Modal: Tambah Username ----------
 class UsernameModal(Modal):
@@ -728,7 +756,6 @@ async def on_ready():
 
 @client.event
 async def on_guild_channel_create(channel):
-    print("channel create:", channel.name)
     await event_manager.on_channel_create(channel)
 
 # --- Run ---
