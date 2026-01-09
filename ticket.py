@@ -7,7 +7,7 @@ SUPPORT_ROLE_ID = 1431927807579000894
 
 
 class TicketHandler:
-    def __init__(self, client, log_channel_id, parent_category="⌯⌲ 𝐓𝐢𝐜𝐤𝐞𝐭"):
+    def __init__(self, client, log_channel_id, parent_category="⌯⌲ Ticket"):
         self.client = client
         self.log_channel_id = log_channel_id
         self.parent_category = parent_category
@@ -43,7 +43,7 @@ class TicketHandler:
             
             content = (first_msg.content or "").lower()
             
-            if "💰 Purchase!" in content or "💰 purchase!" in content:
+            if "Purchase!" in content or "purchase!" in content:
                 role = channel.guild.get_role(SUPPORT_ROLE_ID)
                 mention = role.mention if role else ""
                 
