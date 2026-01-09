@@ -87,9 +87,9 @@ def ticket_message():
 def get_script():
     script_text = (
         "### **For Mobile Users:**\n"
-        '`loadstring(game:HttpGet("https://api.junkie-development.de/api/v1/luascripts/public/9686549246fe5633f6bdb8698d889d3b1abe97dc3021c450a028e59deff70c15/download"))()`\n\n'
+        '`loadstring(game:HttpGet("https://raw.githubusercontent.com/DyyITT/SansMobaHub/refs/heads/main/Fishit"))()`\n\n'
         "### **For PC Users:**\n"
-        '```loadstring(game:HttpGet("https://api.junkie-development.de/api/v1/luascripts/public/9686549246fe5633f6bdb8698d889d3b1abe97dc3021c450a028e59deff70c15/download"))()```\n\n'
+        '```loadstring(game:HttpGet("https://raw.githubusercontent.com/DyyITT/SansMobaHub/refs/heads/main/Fishit"))()```\n\n'
     )
     
     return script_text
